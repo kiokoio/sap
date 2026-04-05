@@ -2,6 +2,8 @@
 name = "saps-db-pool-macro"
 version = "0.1.0"
 edition = "2024"
+description = "Procedural macro for defining PostgreSQL connection pools"
+license = "MIT"
 
 [lib]
 proc-macro = true

@@ -2,5 +2,7 @@
 name = "saps-cli"
 version = "0.1.0"
 edition = "2024"
+description = "CLI tool for the SAP framework"
+license = "MIT"
 
 [dependencies]

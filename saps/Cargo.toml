@@ -2,6 +2,8 @@
 name = "saps"
 version = "0.1.0"
 edition = "2024"
+description = "Core library for the SAP framework"
+license = "MIT"
 
 [dependencies]
 axum = { workspace = true }

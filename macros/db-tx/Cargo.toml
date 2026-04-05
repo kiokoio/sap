@@ -2,6 +2,8 @@
 name = "saps-db-tx"
 version = "0.1.0"
 edition = "2024"
+description = "Procedural macro for database transaction handling"
+license = "MIT"
 
 [lib]
 proc-macro = true
