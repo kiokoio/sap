@@ -1284,6 +1284,9 @@ name = "saps"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "saps-db-pool-macro 0.1.0",
+ "saps-db-tx 0.1.0",
+ "saps-test-macro 0.1.0",
  "sqlx",
 ]
 
@@ -1294,6 +1297,17 @@ version = "0.1.0"
 [[package]]
 name = "saps-db-pool-macro"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "388e39cf799a0d9c57c7a7bc90cb2ad1f653d66cbb8b2693a7ae1b0f018df5ef"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "saps-db-pool-macro"
+version = "0.1.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1303,6 +1317,17 @@ dependencies = [
 [[package]]
 name = "saps-db-tx"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36ee0a60ce8928c0bec5342354d95ebd29d65cf15abbf8218c586ac563c7c36c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "saps-db-tx"
+version = "0.1.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1312,6 +1337,18 @@ dependencies = [
 [[package]]
 name = "saps-test-macro"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bcc40c3202b2792869408d377bb66ed59992e724d16920b6b9a65761d4830cee"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+ "uuid",
+]
+
+[[package]]
+name = "saps-test-macro"
+version = "0.1.1"
 dependencies = [
  "proc-macro2",
  "quote",

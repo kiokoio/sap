@@ -50,9 +50,9 @@ pub fn db_transaction(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Generate the expanded code
     let expanded = quote! {
         // impl #trait_name for #struct_name {
-        impl<T: YieldPostGresPool> #trait_name for #struct_name<T> {
+        impl<T: saps::dal::connections::YieldPostGresPool> #trait_name for #struct_name<T> {
             #[allow(clippy::manual_async_fn)]
-            fn #fn_name #fn_generics (#fn_inputs) -> impl std::future::Future<Output = sqlx::Result<#fn_output>> + Send {
+            fn #fn_name #fn_generics (#fn_inputs) -> impl std::future::Future<Output = saps::sqlx::Result<#fn_output>> + Send {
                 async move #fn_body
             }
         }

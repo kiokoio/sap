@@ -38,7 +38,7 @@ pub fn define_pg_pool(input: TokenStream) -> TokenStream {
     } = parse_macro_input!(input as DbPoolArgs);
 
     quote! {
-        pub static #pool_ident: std::sync::LazyLock<sqlx::postgres::PgPool> = std::sync::LazyLock::new(|| {
+        pub static #pool_ident: std::sync::LazyLock<saps::sqlx::postgres::PgPool> = std::sync::LazyLock::new(|| {
             let connection_string = std::env::var(#url_env).expect("Get env variable for connection string");
 
             let max_connections = match std::env::var(#max_conn_env) {
@@ -48,7 +48,7 @@ pub fn define_pg_pool(input: TokenStream) -> TokenStream {
                 format!("Could not parse {} as max connections", #max_conn_env)
             }).expect("part connections");
 
-            let pool = sqlx::postgres::PgPoolOptions::new()
+            let pool = saps::sqlx::postgres::PgPoolOptions::new()
                 .max_connections(max_connections);
 
             pool.connect_lazy(&connection_string)

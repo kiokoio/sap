@@ -8,3 +8,6 @@ license = "MIT"
 [dependencies]
 axum = { workspace = true }
 sqlx = { workspace = true }
+saps-db-pool-macro = "0.1.0"
+saps-db-tx = "0.1.0"
+saps-test-macro = "0.1.0"

@@ -50,10 +50,8 @@ pub fn db_test(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let expanded = quote! {
         #[test]
         fn #func_name() {
-            use sqlx::Executor;
+            use saps::sqlx::Executor;
             use tokio::runtime::Builder;
-
-            kv_db_macro::define_kv_store!(TestKv, TEMP_TEST_DB);
 
             // set the environment variables for the DB
             unsafe {
@@ -69,7 +67,7 @@ pub fn db_test(_attr: TokenStream, item: TokenStream) -> TokenStream {
             // create the DB in the core DB
             rt.block_on(async {
                 let db_name = #db_name;
-                let mut admin = sqlx::postgres::PgPoolOptions::new()
+                let mut admin = saps::sqlx::postgres::PgPoolOptions::new()
                 .max_connections(1)
                 .connect(#pg_url_lit)
                 .await.expect("make admin DB connection pool");
@@ -78,22 +76,22 @@ pub fn db_test(_attr: TokenStream, item: TokenStream) -> TokenStream {
             });
 
             let test_result = rt.block_on(async {
-                // define the DB pool which is std::sync::LazyLock<sqlx::Pool<sqlx::Postgres>> inner = Pool<sqlx::Postgres>
-                db_pool_macro::define_pg_pool!(SQLX_POSTGRES_POOL, #env_lit, "DB_MAX_CONNECTIONS");
+                // define the DB pool which is std::sync::LazyLock<saps::sqlx::Pool<saps::sqlx::Postgres>> inner = Pool<saps::sqlx::Postgres>
+                saps::define_pg_pool!(SQLX_POSTGRES_POOL, #env_lit, "DB_MAX_CONNECTIONS");
 
                 #[derive(Clone, Debug)]
                 struct TestDbHandle;
 
-                impl dal::connections::sqlx_postgres::YieldPostGresPool for TestDbHandle {
-                    fn yield_pool() -> &'static sqlx::Pool<sqlx::Postgres> {
+                impl saps::dal::connections::YieldPostGresPool for TestDbHandle {
+                    fn yield_pool() -> &'static saps::sqlx::Pool<saps::sqlx::Postgres> {
                         &*SQLX_POSTGRES_POOL
                     }
                 }
 
                 // execute the testing code
                 let handle = tokio::spawn(async {
-                    let pool: &sqlx::Pool<sqlx::Postgres> = &*SQLX_POSTGRES_POOL;
-                    dal::migrations::run_migrations(pool).await;
+                    let pool: &saps::sqlx::Pool<saps::sqlx::Postgres> = &*SQLX_POSTGRES_POOL;
+                    saps::dal::migrations::run_migrations(pool).await;
                     #(#stmts)*
                 });
                 handle.await   // → Result<Result<(), _>, JoinError>
@@ -102,7 +100,7 @@ pub fn db_test(_attr: TokenStream, item: TokenStream) -> TokenStream {
             // drop the DB table
             rt.block_on(async {
                 let db_name = #db_name;
-                let mut admin = sqlx::postgres::PgPoolOptions::new()
+                let mut admin = saps::sqlx::postgres::PgPoolOptions::new()
                 .max_connections(1)
                 .connect(#pg_url_lit)
                 .await.expect("make admin DB connection pool");
