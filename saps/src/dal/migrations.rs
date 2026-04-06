@@ -20,9 +20,9 @@ pub async fn run_migrations(pool: &Pool<Postgres>) {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 struct DummyRole;
 
-impl ToString for DummyRole {
-    fn to_string(&self) -> String {
-        "dummy".to_string()
+impl std::fmt::Display for DummyRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "dummy")
     }
 }
 

@@ -1,11 +1,16 @@
-use saps::axum::{Json, http::StatusCode, response::IntoResponse};
-use saps::auth::dal::tx_definitions::DeleteAuthSession;
-use saps::auth::token::checks::{CheckUserRole, UserRole};
-use saps::auth::token::header_token::HeaderToken;
-use saps::config::GetConfigVariable;
-use saps::dal::connections::YieldPostGresPool;
-use crate::api::core::users::delete::delete_user;
-use crate::dal::models::users::tx_definitions::DeleteUser;
+use saps::{
+    auth::token::{
+        checks::{CheckUserRole, UserRole},
+        header_token::HeaderToken,
+    },
+    axum::{http::StatusCode, response::IntoResponse, Json},
+    config::GetConfigVariable,
+    dal::connections::YieldPostGresPool,
+};
+use crate::{
+    api::core::users::delete::delete_user,
+    dal::models::users::tx_definitions::DeleteUser,
+};
 
 /// DELETE /users — deletes the caller's user account and auth session.
 /// The HeaderToken extractor validates the session before this runs.
@@ -43,31 +48,8 @@ mod tests {
     use crate::api::core::users::create::{NewUser, create_user};
     use crate::dal::models::users::tx_definitions::GetUserByEmail;
     use crate::roles::Role;
-    use saps::auth::dal::tx_definitions::GetAllAuthSessions;
-    use saps::axum::{Router, body::{self, Body, Bytes}, http::{Request, StatusCode}};
+    use saps::auth::dal::tx_definitions::{GetAllAuthSessions, DeleteAuthSession};
     use saps::dal::connections::{AuthPostGresDescriptor, SqlxPostGresDescriptor};
-    use saps::errors::saps::SapsError;
-    use tower::ServiceExt;
-
-    #[derive(Clone)]
-    struct TestConfig;
-
-    impl GetConfigVariable for TestConfig {
-        fn get_config_variable(variable: String) -> Result<String, SapsError> {
-            match variable.as_str() {
-                "SECRET_KEY" => Ok("test_secret".to_string()),
-                "TOKEN_EXPIRE_MINS" => Ok("20".to_string()),
-                _ => Err(SapsError::unknown(format!("{} not found", variable))),
-            }
-        }
-    }
-
-    async fn send(app: &Router, req: Request<Body>) -> (StatusCode, Bytes) {
-        let resp = app.clone().oneshot(req).await.unwrap();
-        let status = resp.status();
-        let bytes = body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-        (status, bytes)
-    }
 
     #[saps::db_test]
     async fn test_delete_user_endpoint() {

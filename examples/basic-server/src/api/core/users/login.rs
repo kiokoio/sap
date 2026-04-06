@@ -8,6 +8,7 @@ use saps::errors::saps::SapsError;
 use crate::dal::models::users::tx_definitions::GetUserByEmail;
 use serde::{Deserialize, Serialize};
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct LoginRequest {
     pub email: String,
@@ -15,6 +16,7 @@ pub struct LoginRequest {
     pub role: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub struct LoginResponse {
     pub token: String,
@@ -25,6 +27,7 @@ pub struct LoginResponse {
 ///
 /// Fetches the user by email via the GetUserByEmail transaction, verifies the password,
 /// creates an AuthSession with the role and user_id in meta, then encodes a HeaderToken.
+#[allow(dead_code)]
 pub async fn login<X, C, Y, R>(
     request: LoginRequest,
 ) -> Result<LoginResponse, SapsError>
@@ -78,19 +81,6 @@ mod tests {
     use saps::auth::dal::tx_definitions::GetAllAuthSessions;
     use saps::dal::connections::{SqlxPostGresDescriptor, AuthPostGresDescriptor};
     use crate::roles::Role;
-
-    #[derive(Clone)]
-    struct TestConfig;
-
-    impl GetConfigVariable for TestConfig {
-        fn get_config_variable(variable: String) -> Result<String, SapsError> {
-            match variable.as_str() {
-                "SECRET_KEY" => Ok("test_secret".to_string()),
-                "TOKEN_EXPIRE_MINS" => Ok("20".to_string()),
-                _ => Err(SapsError::unknown(format!("{} not found", variable))),
-            }
-        }
-    }
 
     // SqlxPostGresDescriptor<TestDbHandle> implements both CreateUser and GetUserByEmail (from postgres_txs).
     // AuthPostGresDescriptor<TestDbHandle> implements CreateAuthSession (from saps).

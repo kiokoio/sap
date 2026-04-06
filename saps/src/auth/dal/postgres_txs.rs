@@ -109,7 +109,7 @@ async fn create_auth_session<U: UserRole>(session: AuthSession<U>) -> AuthSessio
 /// - The query fails
 /// - The returned `role` string cannot be parsed back into `U`
 #[db_transaction(AuthPostGresDescriptor, PingAuthSession)]
-async fn ping_auth_session<U: UserRole>(minutes: i32, session_id: &String) -> Option<AuthSession<U>> {
+async fn ping_auth_session<U: UserRole>(minutes: i32, session_id: &str) -> Option<AuthSession<U>> {
     let pool = T::yield_pool();
     let parsed_id: uuid::Uuid = session_id.parse()
         .map_err(|e| sqlx::Error::Protocol(format!("invalid session_id UUID: {}", e)))?;

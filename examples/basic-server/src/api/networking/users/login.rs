@@ -6,6 +6,7 @@ use crate::api::core::users::login::{LoginRequest, login};
 use crate::dal::models::users::tx_definitions::GetUserByEmail;
 
 /// POST /login — authenticates a user and returns a JWT token.
+#[allow(dead_code)]
 pub async fn login_handler<X, C, Y, R>(
     Json(body): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, impl IntoResponse>

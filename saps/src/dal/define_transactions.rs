@@ -67,6 +67,6 @@ mod tests {
         assert_eq!(outcome, 1);
 
         let outcome = PostgresHandle::<MockDeadPostGresPool>::delete(1).await.unwrap();
-        assert_eq!(outcome, true);
+        assert!(outcome);
     }
 }

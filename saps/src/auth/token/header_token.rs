@@ -331,12 +331,12 @@ mod tests {
         Customer,
     }
 
-    impl ToString for TestRole {
-        fn to_string(&self) -> String {
+    impl std::fmt::Display for TestRole {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
-                TestRole::SuperAdmin => "superadmin".to_string(),
-                TestRole::Admin => "admin".to_string(),
-                TestRole::Customer => "customer".to_string(),
+                TestRole::SuperAdmin => write!(f, "superadmin"),
+                TestRole::Admin => write!(f, "admin"),
+                TestRole::Customer => write!(f, "customer"),
             }
         }
     }

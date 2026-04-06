@@ -106,6 +106,7 @@ macro_rules! define_env_config {
             #[derive(Clone)]
             pub struct $handle;
 
+            #[allow(dead_code)]
             impl $handle {
                 /// Reads each config key from the environment and stores it in a `OnceLock`.
                 /// Call this once at startup. Returns an error if any key is missing.

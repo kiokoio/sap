@@ -147,11 +147,11 @@ macro_rules! construct_checks {
             $( $variant ),*
         }
 
-        // --- 2. Generate ToString (each variant → lowercased name) ---
-        impl ToString for $enum_name {
-            fn to_string(&self) -> String {
+        // --- 2. Generate Display (each variant → lowercased name) ---
+        impl std::fmt::Display for $enum_name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 match self {
-                    $( $enum_name::$variant => stringify!($variant).to_lowercase() ),*
+                    $( $enum_name::$variant => write!(f, "{}", stringify!($variant).to_lowercase()) ),*
                 }
             }
         }
