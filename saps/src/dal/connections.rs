@@ -35,6 +35,11 @@ impl YieldPostGresPool for LivePostGresPool {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct AuthPostGresDescriptor<T: YieldPostGresPool> {
+    db: PhantomData<T>
+}
+
 /// Mock pool that will error if connection is utilised.
 ///
 /// # Notes
