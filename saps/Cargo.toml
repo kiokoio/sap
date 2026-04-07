@@ -20,7 +20,7 @@ base64 = { workspace = true }
 
 saps-db-pool-macro = "0.1.1"
 saps-db-tx = "0.1.1"
-saps-test-macro = "0.1.1"
+saps-test-macro = "0.1.2"
 
 
 [dev-dependencies]

@@ -1579,7 +1579,7 @@ dependencies = [
  "rmp-serde",
  "saps-db-pool-macro 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "saps-db-tx 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "saps-test-macro 0.1.1",
+ "saps-test-macro 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde",
  "serde_json",
  "sqlx",
@@ -1635,9 +1635,7 @@ dependencies = [
 
 [[package]]
 name = "saps-test-macro"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74d44c2f8c80fe2f4184f9a8da1cd4bc9eb9de0c6294e3c954358d2d5ea844ea"
+version = "0.1.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1648,6 +1646,8 @@ dependencies = [
 [[package]]
 name = "saps-test-macro"
 version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2a8846a59f6ea44863aa554fc7ed4473434d6aba4dede644d9403c888d62f42"
 dependencies = [
  "proc-macro2",
  "quote",
