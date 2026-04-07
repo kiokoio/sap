@@ -52,6 +52,7 @@ pub fn db_test(_attr: TokenStream, item: TokenStream) -> TokenStream {
         fn #func_name() {
             use saps::sqlx::Executor;
             use tokio::runtime::Builder;
+            use saps::dal::connections::YieldPostGresPool;
 
             // set the environment variables for the DB
             unsafe {
