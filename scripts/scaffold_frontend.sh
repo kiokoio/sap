@@ -36,7 +36,7 @@ scaffold_ensure_repo_root() {
 
 scaffold_web_dir_for_service() {
     local service_dir=$1
-    echo "${service_dir}/src/frontend/web"
+    echo "${service_dir}/frontend/web"
 }
 
 scaffold_validate_web_dir_empty() {

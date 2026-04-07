@@ -1,9 +1,10 @@
 extern crate self as saps;
 
 pub mod auth;
+pub mod config;
 pub mod dal;
 pub mod errors;
-pub mod config;
+pub mod frontend;
 
 mod constants;
 
