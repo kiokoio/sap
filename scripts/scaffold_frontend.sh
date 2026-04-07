@@ -6,9 +6,6 @@ set -euo pipefail
 #
 # Bootstraps the app with npm create vite (default 6.0.0, template svelte-ts),
 # then npx storybook@<version> init (default 8.6.14, not latest) to scaffold config.
-# create-vite 9 ships @sveltejs/vite-plugin-svelte@7; Storybook 8.6 only peers
-# plugin-svelte ^2–5 — use 6.x here, or set SCAFFOLD_NPM_LEGACY_PEER_DEPS=1 with
-# create-vite 9. Node/.nvmrc does not fix ERESOLVE peer conflicts.
 #
 # Examples:
 #   ./scripts/scaffold_frontend.sh saps
