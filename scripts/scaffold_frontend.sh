@@ -8,8 +8,8 @@ set -euo pipefail
 # then npx storybook@<version> init (default 8.6.14, not latest) to scaffold config.
 #
 # Examples:
-#   ./scripts/scaffold_frontend.sh saps
-#   ./scripts/scaffold_frontend.sh saps saps-app
+#   ./scripts/scaffold_frontend.sh basic-server
+#   ./scripts/scaffold_frontend.sh basic-server basic-app
 # ─────────────────────────────────────────────────────────────────────────────
 
 readonly CREATE_VITE_VERSION="6.0.0"
@@ -250,7 +250,7 @@ scaffold_write_minimal_app_files() {
     local web_dir=$1
     cat >"${web_dir}/src/App.svelte" <<'APPSVELTE'
 <script lang="ts">
-  let message = $state('Hello from Kioko');
+  let message = $state('Hello from Saps');
 </script>
 
 <main data-cmp="App">
