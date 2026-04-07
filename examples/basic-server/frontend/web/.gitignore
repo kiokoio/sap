@@ -12,6 +12,14 @@ dist
 dist-ssr
 *.local
 
+# Vite `build.outDir` (`vite.config.ts` → `public/`): keep layout, ignore generated bundles
+public/bundle.js
+public/bundle.css
+public/bundle.js.map
+public/chunk-*.js
+public/assets/*
+!public/assets/.gitkeep
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

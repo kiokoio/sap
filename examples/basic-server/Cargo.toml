@@ -3,7 +3,12 @@ name = "basic-server"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+embed = ["dep:include_dir"]
+
 [dependencies]
+include_dir = { version = "0.7.4", optional = true }
 saps = { workspace = true }
 sqlx = { workspace = true }
 tokio = { workspace = true }
