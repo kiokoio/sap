@@ -1,6 +1,6 @@
 [package]
 name = "saps"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 description = "Core library for the SAP framework"
 license = "MIT"
@@ -31,12 +31,12 @@ cron = { workspace = true, optional = true }
 postgresql_embedded = { workspace = true, optional = true }
 
 # macros (server-only)
-saps-db-pool-macro = { version = "0.1.1", optional = true }
-saps-db-embedded-pool-macro = { version = "0.1.0", optional = true }
-saps-db-tx = { version = "0.1.1", optional = true }
-saps-test-macro = { version = "0.1.2", optional = true }
-saps-frontend-macro = { version = "0.1.1", optional = true }
-saps-background-task = { version = "0.1.1", optional = true }
+saps-db-pool-macro = { workspace = true, optional = true }
+saps-db-embedded-pool-macro = { workspace = true, optional = true }
+saps-db-tx = { workspace = true, optional = true }
+saps-test-macro = { workspace = true, optional = true }
+saps-frontend-macro = { workspace = true, optional = true }
+saps-background-task = { workspace = true, optional = true }
 
 # open api
 aide = { workspace = true, optional = true }

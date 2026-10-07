@@ -27,28 +27,28 @@ reqwest = { version = "0.13.2", default-features = false, features = ["json"] }
 axum = { version = "0.8.8", features = ["ws"] }
 axum-extra  = { version = "0.12.5", features = ["typed-header"] }
 tower = { version = "0.5.3" }
-tower-http = { version = "0.6.8", features = ["trace", "cors"] }
+tower-http = { version = "0.7.1", features = ["trace", "cors"] }
 http-body-util = "0.1.3"
 hyper = { version = "1.8.1", default-features = false, features = ["http1"] }
 headers = "0.4"
-tokio-tungstenite = "0.29.0"
+tokio-tungstenite = "0.30.0"
 
 # Auth / Security / Crypto
-argon2 = "0.5.3"
-jsonwebtoken = { version = "10.3.0", default-features = false, features = ["rust_crypto"] }
+argon2 = "0.6.0"
+jsonwebtoken = { version = "11.1.0", default-features = false, features = ["rust_crypto"] }
 rand = "0.10.0"
-base64 = "0.22.1"
+base64 = "0.23.1"
 rustls = { version = "0.23", features = ["ring"] }
 
 # Observability
 tracing = "0.1.44"
 
 # DAL DB and storage
-sqlx = { version = "0.8.6", default-features = false, features = [
+sqlx = { version = "0.9.0", default-features = false, features = [
     "postgres", 
     "json", 
     "runtime-tokio", 
-    "runtime-tokio-rustls", 
+    "tls-rustls-ring-webpki", 
     "migrate", 
     "chrono", 
     "uuid",
@@ -57,10 +57,10 @@ sqlx = { version = "0.8.6", default-features = false, features = [
 
 # for proc macros
 quote = "1.0.44"
-syn = { version = "2.0.106", features = ["full"] }
+syn = { version = "3.0.6", features = ["full"] }
 proc-macro2 = "1.0.101"
 paste = "1.0"
-prettyplease = "0.2"
+prettyplease = "0.3.0"
 
 # Utility Crates
 bytes = "1.11.1"
@@ -74,11 +74,12 @@ clap = { version = "4.5.60", features = ["derive"] }
 dotenvy = "0.15"
 
 # Local Crates
-saps-db-pool-macro = { path = "macros/db-pool-macro" }
-saps-db-embedded-pool-macro = { path = "macros/db-embedded-pool-macro" }
-saps-db-tx = { path = "macros/db-tx" }
-saps-test-macro = { path = "macros/test-macro" }
-saps-background-task = { path = "macros/background-task" }
+saps-db-pool-macro = { path = "macros/db-pool-macro", version = "0.1.1" }
+saps-db-embedded-pool-macro = { path = "macros/db-embedded-pool-macro", version = "0.1.0" }
+saps-db-tx = { path = "macros/db-tx", version = "0.1.1" }
+saps-test-macro = { path = "macros/test-macro", version = "0.1.2" }
+saps-frontend-macro = { path = "macros/frontend", version = "0.1.1" }
+saps-background-task = { path = "macros/background-task", version = "0.1.1" }
 saps = { path = "saps" }
 
 # Serialization & Data Types
@@ -96,16 +97,16 @@ rust-embed = "8.11.0"
 
 # background tasks
 ctor = "1.0.6"
-cron = "0.16.0"
+cron = "0.17.0"
 
 # storage
-postgresql_embedded = { version = "0.20.2", features = ["tokio"] }
+postgresql_embedded = { version = "0.21.0", features = ["tokio"] }
 
 # open API
-aide = { version = "0.16.0-alpha.4", features = ["axum", "axum-json", "macros"] }
+aide = { version = "0.15.1", features = ["axum", "axum-json", "macros"] }
 
 # files: collaborative (CRDT) text buffer used by the mem-file layer
-yrs = "0.21"
+yrs = "0.28.0"
 
 # files: embedded key-value store backing the `files-kv` engine
 redb = "4.1.0"

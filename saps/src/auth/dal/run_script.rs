@@ -27,7 +27,8 @@ pub async fn run_sql_script(pool: &Pool<Postgres>, relative_path: &str) -> Resul
         ))
     })?;
 
-    pool.execute(sql.as_str()).await.map_err(|e| {
+    // safe: the script is a trusted file from the caller's own repo
+    pool.execute(sqlx::AssertSqlSafe(sql)).await.map_err(|e| {
         SapsError::unknown(format!(
             "failed to execute SQL script {}: {}",
             full_path.display(),

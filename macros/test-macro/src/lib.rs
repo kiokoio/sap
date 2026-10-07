@@ -72,7 +72,7 @@ pub fn db_test(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 .max_connections(1)
                 .connect(#pg_url_lit)
                 .await.expect("make admin DB connection pool");
-                admin.execute(format!(r#"CREATE DATABASE "{db_name}""#).as_str()).await.expect("execute create DB transaction");
+                admin.execute(saps::sqlx::AssertSqlSafe(format!(r#"CREATE DATABASE "{db_name}""#))).await.expect("execute create DB transaction");
                 admin.close().await;
             });
 
@@ -105,7 +105,7 @@ pub fn db_test(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 .max_connections(1)
                 .connect(#pg_url_lit)
                 .await.expect("make admin DB connection pool");
-                admin.execute(format!(r#"DROP DATABASE "{db_name}" WITH (FORCE)"#).as_str()).await.expect("execute drop DB transaction");
+                admin.execute(saps::sqlx::AssertSqlSafe(format!(r#"DROP DATABASE "{db_name}" WITH (FORCE)"#))).await.expect("execute drop DB transaction");
                 admin.close().await;
 
                 // // Always cleanup

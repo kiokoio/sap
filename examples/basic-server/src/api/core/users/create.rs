@@ -1,8 +1,5 @@
 use crate::dal::models::users::tx_definitions::CreateUser;
-use argon2::{
-    Argon2, PasswordHasher,
-    password_hash::{SaltString, rand_core::OsRng},
-};
+use argon2::{Argon2, PasswordHasher};
 use saps::errors::saps::SapsError;
 use serde::{Deserialize, Serialize};
 
@@ -22,9 +19,9 @@ pub struct UserResponse {
 
 /// Creates a new user by hashing the password and inserting via the CreateUser transaction.
 pub async fn create_user<X: CreateUser>(new_user: NewUser) -> Result<UserResponse, SapsError> {
-    let salt = SaltString::generate(&mut OsRng);
+    // argon2 generates a random salt from the OS RNG
     let password_hash = Argon2::default()
-        .hash_password(new_user.password.as_bytes(), &salt)
+        .hash_password(new_user.password.as_bytes())
         .map_err(|e| SapsError::unknown(e.to_string()))?
         .to_string();
 

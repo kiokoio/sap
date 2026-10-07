@@ -322,7 +322,7 @@ $$;
     /// // Run after generate_migration_sql to enforce one session per user_id
     /// sqlx::raw_sql(AuthSession::<MyRole>::generate_migration_sql())
     ///     .execute(&pool).await?;
-    /// sqlx::raw_sql(&AuthSession::<MyRole>::generate_unique_meta_key_sql("user_id"))
+    /// sqlx::raw_sql(sqlx::AssertSqlSafe(AuthSession::<MyRole>::generate_unique_meta_key_sql("user_id")))
     ///     .execute(&pool).await?;
     /// ```
     pub fn generate_unique_meta_key_sql(key: &str) -> String {
@@ -367,9 +367,9 @@ $$;
     ///
     /// ```ignore
     /// // Allow one session per (user_id, server_tag) pair
-    /// sqlx::raw_sql(&AuthSession::<MyRole>::generate_unique_meta_key_pair_sql(
+    /// sqlx::raw_sql(sqlx::AssertSqlSafe(AuthSession::<MyRole>::generate_unique_meta_key_pair_sql(
     ///     "user_id", "server_tag",
-    /// ))
+    /// )))
     /// .execute(&pool).await?;
     /// ```
     pub fn generate_unique_meta_key_pair_sql(key1: &str, key2: &str) -> String {
@@ -439,7 +439,8 @@ $$;
         pool.execute(Self::generate_migration_sql()).await?;
         for key in unique_meta_keys {
             let sql = Self::generate_unique_meta_key_sql(key);
-            pool.execute(sql.as_str()).await?;
+            // safe: the generator rejects quotes in `key` and sanitises the index name
+            pool.execute(sqlx::AssertSqlSafe(sql)).await?;
         }
         Ok(())
     }
@@ -1183,7 +1184,7 @@ mod tests {
             "user_id",
             "server_tag",
         );
-        saps::sqlx::raw_sql(&sql)
+        saps::sqlx::raw_sql(saps::sqlx::AssertSqlSafe(sql))
             .execute(pool)
             .await
             .expect("install unique pair index");
@@ -1262,7 +1263,7 @@ mod tests {
             "user_id",
             "server_tag",
         );
-        saps::sqlx::raw_sql(&sql)
+        saps::sqlx::raw_sql(saps::sqlx::AssertSqlSafe(sql))
             .execute(pool)
             .await
             .expect("install unique pair index");
@@ -1301,7 +1302,7 @@ mod tests {
             "user_id",
             "server_tag",
         );
-        saps::sqlx::raw_sql(&sql)
+        saps::sqlx::raw_sql(saps::sqlx::AssertSqlSafe(sql))
             .execute(pool)
             .await
             .expect("install unique pair index");
