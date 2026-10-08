@@ -14,9 +14,20 @@
 //! must wipe it between runs (see the tests). Reach the map only through the free functions
 //! below — each one takes the borrow, does its work, and releases it. Never hold a
 //! `FILE_STATE` borrow across an `.await`, or across another `FILE_STATE` access, or the inner
-//! `RefCell` panics on the re-entrant borrow. The editing functions that must await a save
-//! therefore take the buffer *out* of the map, edit it while it is not in the map, and put it
-//! back, so no borrow ever spans the await.
+//! `RefCell` panics on the re-entrant borrow.
+//!
+//! A save only needs the store, the path and the contents, never the buffer itself, so
+//! [`apply_update_to_file`] and [`flush_all`] edit the buffer in place under a short borrow,
+//! copy those three out (the store is `&'static`), release the borrow and then await the write.
+//! The buffer stays in the map throughout, so a [`read_file`] or another merge while a save is
+//! in flight finds it as normal. Taking the buffer *out* of the map for the await instead (as
+//! [`write_transaction_to_file`] still does) hides the file for the whole write: a merge into
+//! it fails as "not open" and its update is lost, and a [`remove_file`] during the write is
+//! undone when the buffer is put back.
+//!
+//! Overlapping saves of one file land in order: `IndexedDbIo::write_file` issues its `put`
+//! before its first await, and IndexedDB runs readwrite transactions on the same store in the
+//! order they were created, so an older write can never land after a newer one.
 //!
 //! ## The store is `'static`
 //!
@@ -38,6 +49,7 @@ use crate::kernel::transaction::{
 
 use crate::files::engines::async_io::indexed_db::IndexedDbIo;
 use crate::files::files::mem_files::full_mem_file::{Async, MemFile};
+use crate::files::io::async_file::AsyncFileIo;
 use crate::files::paths::{FilePath, Path};
 
 /// A browser buffer: a `MemFile` whose async saves persist to IndexedDB, holding a `'static`
@@ -201,8 +213,11 @@ pub async fn write_transaction_to_file(
 /// This is the inbound half of collaboration: the server broadcasts the `yrs` update its
 /// authoritative buffer produced, and each replica integrates it here so its buffer converges.
 /// Applying the update is idempotent and commutative — a replay or an out-of-order arrival
-/// still converges. The merged text is then saved so the compiler sees it. As with
-/// [`write_transaction_to_file`], the buffer is taken out of the map for the awaited save.
+/// still converges. The merged text is then saved so the compiler sees it.
+///
+/// The merge happens in place and the buffer never leaves the map (see the module docs), so
+/// updates that arrive back to back — a burst of echoes the server held behind a compile —
+/// all merge, even while an earlier one's save is still in flight.
 ///
 /// # Arguments
 /// - `path`: The file whose buffer the update is merged into.
@@ -210,20 +225,17 @@ pub async fn write_transaction_to_file(
 ///
 /// # Returns
 /// `Ok(())` once merged and persisted, or a `FileError` if no file is open at `path`, the bytes
-/// are not a valid `yrs` update, or the save fails. The buffer is always returned to the map.
+/// are not a valid `yrs` update, or the save fails.
 pub async fn apply_update_to_file(path: &str, update: &[u8]) -> Result<(), FileError> {
-    let mut file = FILE_STATE
-        .with_borrow_mut(|state| state.remove(path))
-        .ok_or_else(|| not_open(path, "apply an update to"))?;
-    // `apply_update` is synchronous and does not flush, so persist explicitly afterwards.
-    let result = match file.apply_update(update) {
-        Ok(()) => file.save().await,
-        Err(error) => Err(error),
-    };
-    FILE_STATE.with_borrow_mut(|state| {
-        state.insert(path.to_string(), file);
-    });
-    result
+    let (store, file_path, contents) = FILE_STATE.with_borrow_mut(|state| -> Result<_, FileError> {
+        let file = state.get_mut(path).ok_or_else(|| not_open(path, "apply an update to"))?;
+        file.apply_update(update)?;
+        // Reset now, not after the write: the counter is edits since the contents last handed
+        // to the store, and edits made while this write is in flight are not in `contents`.
+        file.ops_since_save = 0;
+        Ok((file.backend.store, file.path.clone(), file.contents()))
+    })?;
+    store.write_file(&file_path, contents).await
 }
 
 /// Reads the current contents of the buffer at `path`.
@@ -271,24 +283,30 @@ pub fn subpaths_of(path: &str) -> Vec<String> {
 /// read of the store (the compile) sees the latest edits.
 ///
 /// Single character edits batch in the buffer and only flush once enough build up, so at any
-/// moment some buffers can hold edits IndexedDB has not seen. This saves every one. The whole
-/// map is taken out first so the awaited saves never span a `FILE_STATE` borrow, then the
-/// buffers are put back.
+/// moment some buffers can hold edits IndexedDB has not seen. This saves every one. Every
+/// buffer's contents are copied out under one short borrow and the writes awaited afterwards,
+/// so the buffers stay in the map (see the module docs): edits and merges arriving during the
+/// flush land as normal, and are picked up by the next save.
 ///
 /// # Returns
 /// `Ok(())` once every buffer has been saved, or the last save error if any failed (every
-/// buffer is still attempted and returned to the map).
+/// buffer is still attempted).
 pub async fn flush_all() -> Result<(), FileError> {
-    let mut files = FILE_STATE.with_borrow_mut(std::mem::take);
+    let saves: Vec<_> = FILE_STATE.with_borrow_mut(|state| {
+        state
+            .values_mut()
+            .map(|file| {
+                file.ops_since_save = 0;
+                (file.backend.store, file.path.clone(), file.contents())
+            })
+            .collect()
+    });
     let mut result = Ok(());
-    for file in files.values_mut() {
-        if let Err(error) = file.save().await {
+    for (store, file_path, contents) in saves {
+        if let Err(error) = store.write_file(&file_path, contents).await {
             result = Err(error);
         }
     }
-    // Put the buffers back. `extend` keeps any file opened during the awaits above rather than
-    // discarding it, overwriting only the paths that were being flushed.
-    FILE_STATE.with_borrow_mut(|state| state.extend(files));
     result
 }
 
@@ -362,7 +380,7 @@ mod tests {
     // compiler would see the same bytes.
 
     use super::*;
-    use crate::files::io::async_file::AsyncFileIo;
+    use futures::join;
     use wasm_bindgen_test::*;
 
     wasm_bindgen_test_configure!(run_in_browser);
@@ -495,6 +513,94 @@ mod tests {
         apply_update_to_file("a.cad", &update).await.expect("apply update");
 
         assert_eq!(read_file("a.cad").as_deref(), Some("hello world"));
+    }
+
+    /// Opens `a.cad` in the session as a replica of an origin buffer holding `start`, and
+    /// returns two updates the origin makes one after the other: inserting `first` at the
+    /// start, then `second` at the start. Applying both, in order, gives `second + first +
+    /// start`.
+    async fn joined_with_two_updates(
+        origin_db: &str,
+        start: &str,
+        first: &str,
+        second: &str,
+    ) -> (Vec<u8>, Vec<u8>) {
+        let origin_store = IndexedDbIo::new(origin_db).await.unwrap();
+        let mut origin =
+            MemFile::from_string(file("a.cad"), Async::new(&origin_store), start.into());
+        insert_file_from_state("a.cad", &origin.encode_state()).await.expect("join");
+
+        let before_first = origin.state_vector();
+        origin.insert_text(CursorIndex { line: 0, col: 0 }, first).await.unwrap();
+        let first_update = origin.encode_diff(&before_first).unwrap();
+
+        let before_second = origin.state_vector();
+        origin.insert_text(CursorIndex { line: 0, col: 0 }, second).await.unwrap();
+        let second_update = origin.encode_diff(&before_second).unwrap();
+
+        (first_update, second_update)
+    }
+
+    #[wasm_bindgen_test]
+    async fn back_to_back_updates_both_merge_while_a_save_is_in_flight() {
+        // The case a compile produces: the server releases a queue of held echoes together,
+        // so a second update arrives while the first one's IndexedDB write is still pending.
+        // `join!` polls the first merge until it awaits its write, then starts the second.
+        // Taking the buffer out of the map for the write used to fail the second merge as
+        // "not open" and lose its update.
+        setup("browser_state_back_to_back").await;
+        let (first, second) =
+            joined_with_two_updates("browser_state_back_to_back_origin", "world", "hello ", ">> ")
+                .await;
+
+        let (first_result, second_result) =
+            join!(apply_update_to_file("a.cad", &first), apply_update_to_file("a.cad", &second));
+
+        assert!(first_result.is_ok());
+        assert!(second_result.is_ok());
+        assert_eq!(read_file("a.cad").as_deref(), Some(">> hello world"));
+        // The overlapping writes landed in order, so IndexedDB holds the newest text.
+        assert_eq!(
+            read_store("browser_state_back_to_back", "a.cad").await.as_deref(),
+            Some(">> hello world")
+        );
+    }
+
+    #[wasm_bindgen_test]
+    async fn read_file_sees_the_merge_while_its_save_is_in_flight() {
+        // The editor reconciles by reading the buffer, and it can do so while a save is still
+        // pending. The buffer has to be there, already merged, rather than missing.
+        setup("browser_state_read_during_save").await;
+        let (first, _) =
+            joined_with_two_updates("browser_state_read_during_save_origin", "world", "hello ", "")
+                .await;
+
+        let (result, read_during_save) =
+            join!(apply_update_to_file("a.cad", &first), async { read_file("a.cad") });
+
+        assert!(result.is_ok());
+        assert_eq!(read_during_save.as_deref(), Some("hello world"));
+    }
+
+    #[wasm_bindgen_test]
+    async fn flush_all_keeps_files_open_while_it_writes() {
+        // A compile flushes every buffer first. Files used to be taken out of the map for the
+        // whole flush, so any merge during it failed and every read came back empty.
+        setup("browser_state_flush_keeps_open").await;
+        let (first, _) =
+            joined_with_two_updates("browser_state_flush_keeps_open_origin", "world", "hello ", "")
+                .await;
+
+        let (flush_result, merge_result) =
+            join!(flush_all(), apply_update_to_file("a.cad", &first));
+
+        assert!(flush_result.is_ok());
+        assert!(merge_result.is_ok());
+        assert_eq!(read_file("a.cad").as_deref(), Some("hello world"));
+        assert_eq!(
+            read_store("browser_state_flush_keeps_open", "a.cad").await.as_deref(),
+            Some("hello world")
+        );
     }
 
     #[wasm_bindgen_test]
