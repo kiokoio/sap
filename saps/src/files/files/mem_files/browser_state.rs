@@ -19,11 +19,12 @@
 //! A save only needs the store, the path and the contents, never the buffer itself, so
 //! [`apply_update_to_file`] and [`flush_all`] edit the buffer in place under a short borrow,
 //! copy those three out (the store is `&'static`), release the borrow and then await the write.
-//! The buffer stays in the map throughout, so a [`read_file`] or another merge while a save is
-//! in flight finds it as normal. Taking the buffer *out* of the map for the await instead (as
-//! [`write_transaction_to_file`] still does) hides the file for the whole write: a merge into
-//! it fails as "not open" and its update is lost, and a [`remove_file`] during the write is
-//! undone when the buffer is put back.
+//! [`write_transaction_to_file`] does the same, applying every operation in place before its
+//! one save. The buffer stays in the map throughout, so a [`read_file`] or another edit while a
+//! save is in flight finds it as normal. Taking the buffer *out* of the map for the await
+//! instead would hide the file for the whole write: a merge into it would fail as "not open"
+//! and lose its update, and a [`remove_file`] during the write would be undone when the buffer
+//! was put back.
 //!
 //! Overlapping saves of one file land in order: `IndexedDbIo::write_file` issues its `put`
 //! before its first await, and IndexedDB runs readwrite transactions on the same store in the
@@ -48,6 +49,8 @@ use crate::kernel::transaction::{
 };
 
 use crate::files::engines::async_io::indexed_db::IndexedDbIo;
+use crate::files::files::mem_files::constants::SAVE_THRESHOLD;
+use crate::files::files::mem_files::full_descriptors::tx_utils;
 use crate::files::files::mem_files::full_mem_file::{Async, MemFile};
 use crate::files::io::async_file::AsyncFileIo;
 use crate::files::paths::{FilePath, Path};
@@ -103,7 +106,10 @@ fn store() -> Result<&'static IndexedDbIo, FileError> {
 
 /// Builds a `FileError::MemFile` for an operation aimed at a path that is not open.
 fn not_open(path: &str, action: &str) -> FileError {
-    FileError::MemFile { path: path.to_string(), message: format!("file not open to {action}") }
+    FileError::MemFile {
+        path: path.to_string(),
+        message: format!("file not open to {action}"),
+    }
 }
 
 /// Opens a file into the session by joining an existing collaborative session from the origin's
@@ -183,29 +189,44 @@ pub fn wipe_state() {
 /// Applies a transaction to the buffer at `path`.
 ///
 /// Each operation is resolved against the buffer as it stands when that operation runs, so an
-/// operation's position must account for the edits before it in the same transaction. The
-/// buffer is taken out of the map for the edit and put back afterwards, so the awaited saves
-/// never span a `FILE_STATE` borrow.
+/// operation's position must account for the edits before it in the same transaction.
+///
+/// Every operation is applied in place, without IO, while the buffer stays in the map (see the
+/// module docs). The transaction is then saved at most once, after the last operation, if the
+/// saving policy calls for it: a bulk edit (a run longer than one character) always does, and
+/// single character edits do once [`SAVE_THRESHOLD`] of them have built up since the last save.
 ///
 /// # Arguments
 /// - `path`: The file to apply the transaction to.
 /// - `transaction`: The ordered edits to apply.
 ///
 /// # Returns
-/// `Ok(())` once the transaction is applied and persisted, or a `FileError` if no file is open
-/// at `path` or an edit fails. The buffer is always returned to the map, even on error.
+/// `Ok(())` once the transaction is applied (and persisted, if a save was due), or a
+/// `FileError` if no file is open at `path`, an edit fails, or the save fails. The operations
+/// before a failing one stay applied, and reach IndexedDB with the next save.
 pub async fn write_transaction_to_file(
     path: &str,
     transaction: &Transaction,
 ) -> Result<(), FileError> {
-    let mut file = FILE_STATE
-        .with_borrow_mut(|state| state.remove(path))
-        .ok_or_else(|| not_open(path, "apply a transaction to"))?;
-    let result = apply_transaction(&mut file, transaction).await;
-    FILE_STATE.with_borrow_mut(|state| {
-        state.insert(path.to_string(), file);
-    });
-    result
+    let save = FILE_STATE.with_borrow_mut(|state| -> Result<_, FileError> {
+        let file = state
+            .get_mut(path)
+            .ok_or_else(|| not_open(path, "apply a transaction to"))?;
+        if !apply_transaction(file, transaction)? {
+            return Ok(None);
+        }
+        // Reset now, not after the write, for the same reason as in `apply_update_to_file`.
+        file.ops_since_save = 0;
+        Ok(Some((
+            file.backend.store,
+            file.path.clone(),
+            file.contents(),
+        )))
+    })?;
+    match save {
+        Some((store, file_path, contents)) => store.write_file(&file_path, contents).await,
+        None => Ok(()),
+    }
 }
 
 /// Merges a `yrs` update from a peer into the open buffer at `path`.
@@ -227,14 +248,17 @@ pub async fn write_transaction_to_file(
 /// `Ok(())` once merged and persisted, or a `FileError` if no file is open at `path`, the bytes
 /// are not a valid `yrs` update, or the save fails.
 pub async fn apply_update_to_file(path: &str, update: &[u8]) -> Result<(), FileError> {
-    let (store, file_path, contents) = FILE_STATE.with_borrow_mut(|state| -> Result<_, FileError> {
-        let file = state.get_mut(path).ok_or_else(|| not_open(path, "apply an update to"))?;
-        file.apply_update(update)?;
-        // Reset now, not after the write: the counter is edits since the contents last handed
-        // to the store, and edits made while this write is in flight are not in `contents`.
-        file.ops_since_save = 0;
-        Ok((file.backend.store, file.path.clone(), file.contents()))
-    })?;
+    let (store, file_path, contents) =
+        FILE_STATE.with_borrow_mut(|state| -> Result<_, FileError> {
+            let file = state
+                .get_mut(path)
+                .ok_or_else(|| not_open(path, "apply an update to"))?;
+            file.apply_update(update)?;
+            // Reset now, not after the write: the counter is edits since the contents last handed
+            // to the store, and edits made while this write is in flight are not in `contents`.
+            file.ops_since_save = 0;
+            Ok((file.backend.store, file.path.clone(), file.contents()))
+        })?;
     store.write_file(&file_path, contents).await
 }
 
@@ -312,60 +336,94 @@ pub async fn flush_all() -> Result<(), FileError> {
 
 // MARK: - Transaction application
 
-/// Applies every operation in `transaction` to `file` in list order, persisting through the
-/// buffer's own batched async save path.
+/// Applies every operation in `transaction` to `file` in list order, in place and without IO.
 ///
 /// A swap is applied as a delete of its run followed by an insert of the replacement at the
 /// same position, so the replacement may be a different length from the run it replaces.
-async fn apply_transaction(
-    file: &mut BrowserFile,
-    transaction: &Transaction,
-) -> Result<(), FileError> {
+///
+/// # Returns
+/// Whether the transaction is due a save under the buffer's saving policy: `true` if any
+/// operation was a bulk edit, or if the single character edits since the last save have
+/// reached [`SAVE_THRESHOLD`].
+fn apply_transaction(file: &mut BrowserFile, transaction: &Transaction) -> Result<bool, FileError> {
+    let mut bulk_edit = false;
     for operation in transaction.operations() {
         match operation {
             Operation::Insert(InsertSlice { position, content }) => {
-                apply_insert(file, *position, content).await?
-            },
+                bulk_edit |= apply_insert(file, *position, content)?;
+            }
             Operation::Delete(DeleteSlice { position, length }) => {
-                apply_delete(file, *position, *length).await?
-            },
-            Operation::Swap(SwapSlice { position, length, content }) => {
-                apply_delete(file, *position, *length).await?;
-                apply_insert(file, *position, content).await?;
-            },
+                bulk_edit |= apply_delete(file, *position, *length)?;
+            }
+            Operation::Swap(SwapSlice {
+                position,
+                length,
+                content,
+            }) => {
+                bulk_edit |= apply_delete(file, *position, *length)?;
+                bulk_edit |= apply_insert(file, *position, content)?;
+            }
         }
     }
-    Ok(())
+    Ok(bulk_edit || file.ops_since_save >= SAVE_THRESHOLD)
 }
 
-/// Inserts `content` at `position`, choosing the buffer path by run length: a single character
-/// takes the buffered `insert_char` path, a longer run the immediate `insert_text` path, and an
-/// empty run is nothing to do.
-async fn apply_insert(
+/// Inserts `content` at `position`. A single character is counted towards
+/// [`SAVE_THRESHOLD`]; a longer run is a bulk edit; an empty run is nothing to do.
+///
+/// # Returns
+/// Whether the insert was a bulk edit, which is always due a save.
+fn apply_insert(
     file: &mut BrowserFile,
     position: CursorIndex,
     content: &str,
-) -> Result<(), FileError> {
+) -> Result<bool, FileError> {
     let mut characters = content.chars();
     match (characters.next(), characters.next()) {
-        (None, _) => Ok(()),
-        (Some(character), None) => file.insert_char(position, character).await,
-        (Some(_), Some(_)) => file.insert_text(position, content).await,
+        (None, _) => Ok(false),
+        (Some(character), None) => {
+            let contents = file.contents();
+            tx_utils::insert_char(
+                &contents,
+                &mut file.text,
+                &mut file.doc,
+                &position,
+                character,
+            )?;
+            file.ops_since_save += 1;
+            Ok(false)
+        }
+        (Some(_), Some(_)) => {
+            let contents = file.contents();
+            tx_utils::insert_text(&contents, &mut file.text, &mut file.doc, &position, content)?;
+            Ok(true)
+        }
     }
 }
 
-/// Deletes `length` characters from `position`, choosing the buffer path by run length: one
-/// character takes the buffered `delete_char` path, a longer run the immediate `delete_range`
-/// path, and a zero length run is nothing to do.
-async fn apply_delete(
+/// Deletes `length` characters from `position`. One character is counted towards
+/// [`SAVE_THRESHOLD`]; a longer run is a bulk edit; a zero length run is nothing to do.
+///
+/// # Returns
+/// Whether the delete was a bulk edit, which is always due a save.
+fn apply_delete(
     file: &mut BrowserFile,
     position: CursorIndex,
     length: usize,
-) -> Result<(), FileError> {
+) -> Result<bool, FileError> {
     match length {
-        0 => Ok(()),
-        1 => file.delete_char(position).await,
-        _ => file.delete_range(position, length).await,
+        0 => Ok(false),
+        1 => {
+            let contents = file.contents();
+            tx_utils::delete_char(&contents, &mut file.text, &mut file.doc, &position)?;
+            file.ops_since_save += 1;
+            Ok(false)
+        }
+        _ => {
+            let contents = file.contents();
+            tx_utils::delete_range(&contents, &mut file.text, &mut file.doc, &position, length)?;
+            Ok(true)
+        }
     }
 }
 
@@ -393,7 +451,9 @@ mod tests {
     /// map and an isolated database.
     async fn setup(db_name: &str) {
         wipe_state();
-        configure_persistence(db_name).await.expect("configure persistence");
+        configure_persistence(db_name)
+            .await
+            .expect("configure persistence");
     }
 
     /// Reads `path` straight out of the IndexedDB database `db_name` through a fresh engine —
@@ -415,12 +475,16 @@ mod tests {
     async fn insert_from_string_stores_and_persists() {
         setup("browser_state_insert_string").await;
 
-        insert_file_from_string("a.cad", "hello".into()).await.expect("insert");
+        insert_file_from_string("a.cad", "hello".into())
+            .await
+            .expect("insert");
 
         // The buffer reads back live, and the seeded text reached IndexedDB for the compiler.
         assert_eq!(read_file("a.cad").as_deref(), Some("hello"));
         assert_eq!(
-            read_store("browser_state_insert_string", "a.cad").await.as_deref(),
+            read_store("browser_state_insert_string", "a.cad")
+                .await
+                .as_deref(),
             Some("hello")
         );
     }
@@ -435,7 +499,9 @@ mod tests {
             MemFile::from_string(file("a.cad"), Async::new(&origin_store), "shared".into());
         let state = origin.encode_state();
 
-        insert_file_from_state("a.cad", &state).await.expect("insert");
+        insert_file_from_state("a.cad", &state)
+            .await
+            .expect("insert");
 
         assert_eq!(read_file("a.cad").as_deref(), Some("shared"));
     }
@@ -443,7 +509,9 @@ mod tests {
     #[wasm_bindgen_test]
     async fn remove_file_drops_it_from_state() {
         setup("browser_state_remove").await;
-        insert_file_from_string("a.cad", "hello".into()).await.expect("insert");
+        insert_file_from_string("a.cad", "hello".into())
+            .await
+            .expect("insert");
 
         remove_file("a.cad");
 
@@ -462,8 +530,12 @@ mod tests {
     #[wasm_bindgen_test]
     async fn wipe_state_clears_every_file() {
         setup("browser_state_wipe").await;
-        insert_file_from_string("a.cad", "x".into()).await.expect("insert");
-        insert_file_from_string("b.cad", "y".into()).await.expect("insert");
+        insert_file_from_string("a.cad", "x".into())
+            .await
+            .expect("insert");
+        insert_file_from_string("b.cad", "y".into())
+            .await
+            .expect("insert");
 
         wipe_state();
 
@@ -473,14 +545,20 @@ mod tests {
     #[wasm_bindgen_test]
     async fn write_transaction_applies_and_persists() {
         setup("browser_state_write_tx").await;
-        insert_file_from_string("a.cad", "world".into()).await.expect("insert");
+        insert_file_from_string("a.cad", "world".into())
+            .await
+            .expect("insert");
 
-        write_transaction_to_file("a.cad", &insert_at(0, 0, "hello ")).await.expect("apply");
+        write_transaction_to_file("a.cad", &insert_at(0, 0, "hello "))
+            .await
+            .expect("apply");
 
         assert_eq!(read_file("a.cad").as_deref(), Some("hello world"));
         // The post-edit text reached IndexedDB for the compiler.
         assert_eq!(
-            read_store("browser_state_write_tx", "a.cad").await.as_deref(),
+            read_store("browser_state_write_tx", "a.cad")
+                .await
+                .as_deref(),
             Some("hello world")
         );
     }
@@ -499,18 +577,27 @@ mod tests {
         setup("browser_state_apply_update").await;
         // Two replicas of the same file, joined from one origin state so their CRDT identities
         // line up and the update converges.
-        let origin_store = IndexedDbIo::new("browser_state_apply_origin").await.unwrap();
+        let origin_store = IndexedDbIo::new("browser_state_apply_origin")
+            .await
+            .unwrap();
         let origin = MemFile::from_string(file("a.cad"), Async::new(&origin_store), "world".into());
-        insert_file_from_state("a.cad", &origin.encode_state()).await.expect("join");
+        insert_file_from_state("a.cad", &origin.encode_state())
+            .await
+            .expect("join");
         assert_eq!(read_file("a.cad").as_deref(), Some("world"));
 
         // The origin makes an edit and ships the diff; our buffer merges it.
         let mut origin = origin;
         let state_vector = origin.state_vector();
-        origin.insert_text(CursorIndex { line: 0, col: 0 }, "hello ").await.unwrap();
+        origin
+            .insert_text(CursorIndex { line: 0, col: 0 }, "hello ")
+            .await
+            .unwrap();
         let update = origin.encode_diff(&state_vector).unwrap();
 
-        apply_update_to_file("a.cad", &update).await.expect("apply update");
+        apply_update_to_file("a.cad", &update)
+            .await
+            .expect("apply update");
 
         assert_eq!(read_file("a.cad").as_deref(), Some("hello world"));
     }
@@ -528,14 +615,22 @@ mod tests {
         let origin_store = IndexedDbIo::new(origin_db).await.unwrap();
         let mut origin =
             MemFile::from_string(file("a.cad"), Async::new(&origin_store), start.into());
-        insert_file_from_state("a.cad", &origin.encode_state()).await.expect("join");
+        insert_file_from_state("a.cad", &origin.encode_state())
+            .await
+            .expect("join");
 
         let before_first = origin.state_vector();
-        origin.insert_text(CursorIndex { line: 0, col: 0 }, first).await.unwrap();
+        origin
+            .insert_text(CursorIndex { line: 0, col: 0 }, first)
+            .await
+            .unwrap();
         let first_update = origin.encode_diff(&before_first).unwrap();
 
         let before_second = origin.state_vector();
-        origin.insert_text(CursorIndex { line: 0, col: 0 }, second).await.unwrap();
+        origin
+            .insert_text(CursorIndex { line: 0, col: 0 }, second)
+            .await
+            .unwrap();
         let second_update = origin.encode_diff(&before_second).unwrap();
 
         (first_update, second_update)
@@ -549,19 +644,27 @@ mod tests {
         // Taking the buffer out of the map for the write used to fail the second merge as
         // "not open" and lose its update.
         setup("browser_state_back_to_back").await;
-        let (first, second) =
-            joined_with_two_updates("browser_state_back_to_back_origin", "world", "hello ", ">> ")
-                .await;
+        let (first, second) = joined_with_two_updates(
+            "browser_state_back_to_back_origin",
+            "world",
+            "hello ",
+            ">> ",
+        )
+        .await;
 
-        let (first_result, second_result) =
-            join!(apply_update_to_file("a.cad", &first), apply_update_to_file("a.cad", &second));
+        let (first_result, second_result) = join!(
+            apply_update_to_file("a.cad", &first),
+            apply_update_to_file("a.cad", &second)
+        );
 
         assert!(first_result.is_ok());
         assert!(second_result.is_ok());
         assert_eq!(read_file("a.cad").as_deref(), Some(">> hello world"));
         // The overlapping writes landed in order, so IndexedDB holds the newest text.
         assert_eq!(
-            read_store("browser_state_back_to_back", "a.cad").await.as_deref(),
+            read_store("browser_state_back_to_back", "a.cad")
+                .await
+                .as_deref(),
             Some(">> hello world")
         );
     }
@@ -571,12 +674,17 @@ mod tests {
         // The editor reconciles by reading the buffer, and it can do so while a save is still
         // pending. The buffer has to be there, already merged, rather than missing.
         setup("browser_state_read_during_save").await;
-        let (first, _) =
-            joined_with_two_updates("browser_state_read_during_save_origin", "world", "hello ", "")
-                .await;
+        let (first, _) = joined_with_two_updates(
+            "browser_state_read_during_save_origin",
+            "world",
+            "hello ",
+            "",
+        )
+        .await;
 
-        let (result, read_during_save) =
-            join!(apply_update_to_file("a.cad", &first), async { read_file("a.cad") });
+        let (result, read_during_save) = join!(apply_update_to_file("a.cad", &first), async {
+            read_file("a.cad")
+        });
 
         assert!(result.is_ok());
         assert_eq!(read_during_save.as_deref(), Some("hello world"));
@@ -587,9 +695,13 @@ mod tests {
         // A compile flushes every buffer first. Files used to be taken out of the map for the
         // whole flush, so any merge during it failed and every read came back empty.
         setup("browser_state_flush_keeps_open").await;
-        let (first, _) =
-            joined_with_two_updates("browser_state_flush_keeps_open_origin", "world", "hello ", "")
-                .await;
+        let (first, _) = joined_with_two_updates(
+            "browser_state_flush_keeps_open_origin",
+            "world",
+            "hello ",
+            "",
+        )
+        .await;
 
         let (flush_result, merge_result) =
             join!(flush_all(), apply_update_to_file("a.cad", &first));
@@ -598,7 +710,9 @@ mod tests {
         assert!(merge_result.is_ok());
         assert_eq!(read_file("a.cad").as_deref(), Some("hello world"));
         assert_eq!(
-            read_store("browser_state_flush_keeps_open", "a.cad").await.as_deref(),
+            read_store("browser_state_flush_keeps_open", "a.cad")
+                .await
+                .as_deref(),
             Some("hello world")
         );
     }
@@ -611,24 +725,135 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
+    async fn a_merge_lands_while_a_transaction_save_is_in_flight() {
+        // A local transaction's save and a peer's update overlap. The transaction used to take
+        // the buffer out of the map for its save, so the merge failed as "not open".
+        setup("browser_state_tx_then_merge").await;
+        let (first, _) =
+            joined_with_two_updates("browser_state_tx_then_merge_origin", "world", "hello ", "")
+                .await;
+
+        // A bulk insert at the end, so it is saved straight away and does not collide with
+        // the peer's insert at the start.
+        let transaction = insert_at(0, 5, "!!");
+        let (write_result, merge_result) = join!(
+            write_transaction_to_file("a.cad", &transaction),
+            apply_update_to_file("a.cad", &first)
+        );
+
+        assert!(write_result.is_ok());
+        assert!(merge_result.is_ok());
+        assert_eq!(read_file("a.cad").as_deref(), Some("hello world!!"));
+        assert_eq!(
+            read_store("browser_state_tx_then_merge", "a.cad")
+                .await
+                .as_deref(),
+            Some("hello world!!")
+        );
+    }
+
+    #[wasm_bindgen_test]
+    async fn single_character_transactions_save_once_the_threshold_is_reached() {
+        setup("browser_state_tx_threshold").await;
+        insert_file_from_string("a.cad", String::new())
+            .await
+            .expect("insert");
+
+        // Below the threshold the edits stay in the buffer only.
+        for column in 0..SAVE_THRESHOLD - 1 {
+            write_transaction_to_file("a.cad", &insert_at(0, column, "x"))
+                .await
+                .expect("edit");
+        }
+        assert_eq!(
+            read_store("browser_state_tx_threshold", "a.cad")
+                .await
+                .as_deref(),
+            Some("")
+        );
+
+        // The edit that reaches the threshold saves all of them.
+        write_transaction_to_file("a.cad", &insert_at(0, SAVE_THRESHOLD - 1, "x"))
+            .await
+            .expect("edit");
+        let expected = "x".repeat(SAVE_THRESHOLD);
+        assert_eq!(
+            read_store("browser_state_tx_threshold", "a.cad")
+                .await
+                .as_deref(),
+            Some(expected.as_str())
+        );
+    }
+
+    #[wasm_bindgen_test]
+    async fn a_mixed_transaction_saves_its_final_text_once() {
+        // A bulk edit followed by single character edits in one transaction: the whole
+        // transaction is applied before its one save, so IndexedDB gets the final text,
+        // trailing single characters included.
+        setup("browser_state_tx_mixed").await;
+        insert_file_from_string("a.cad", "world".into())
+            .await
+            .expect("insert");
+        let transaction = Transaction::new(vec![
+            Operation::Insert(InsertSlice {
+                position: CursorIndex { line: 0, col: 0 },
+                content: "hello ".into(),
+            }),
+            Operation::Insert(InsertSlice {
+                position: CursorIndex { line: 0, col: 11 },
+                content: "!".into(),
+            }),
+            Operation::Swap(SwapSlice {
+                position: CursorIndex { line: 0, col: 0 },
+                length: 1,
+                content: "H".into(),
+            }),
+        ]);
+
+        write_transaction_to_file("a.cad", &transaction)
+            .await
+            .expect("apply");
+
+        assert_eq!(read_file("a.cad").as_deref(), Some("Hello world!"));
+        assert_eq!(
+            read_store("browser_state_tx_mixed", "a.cad")
+                .await
+                .as_deref(),
+            Some("Hello world!")
+        );
+    }
+
+    #[wasm_bindgen_test]
     async fn flush_all_persists_batched_edits() {
         setup("browser_state_flush").await;
-        insert_file_from_string("a.cad", "abcd".into()).await.expect("insert");
+        insert_file_from_string("a.cad", "abcd".into())
+            .await
+            .expect("insert");
 
         // A single char edit stays batched below the save threshold, so IndexedDB still holds
         // the seeded text until an explicit flush.
-        write_transaction_to_file("a.cad", &insert_at(0, 0, "X")).await.expect("edit");
-        assert_eq!(read_store("browser_state_flush", "a.cad").await.as_deref(), Some("abcd"));
+        write_transaction_to_file("a.cad", &insert_at(0, 0, "X"))
+            .await
+            .expect("edit");
+        assert_eq!(
+            read_store("browser_state_flush", "a.cad").await.as_deref(),
+            Some("abcd")
+        );
 
         flush_all().await.expect("flush");
 
-        assert_eq!(read_store("browser_state_flush", "a.cad").await.as_deref(), Some("Xabcd"));
+        assert_eq!(
+            read_store("browser_state_flush", "a.cad").await.as_deref(),
+            Some("Xabcd")
+        );
     }
 
     /// Opens a set of files under the given paths for the subpath tests.
     async fn open(paths: &[&str]) {
         for path in paths {
-            insert_file_from_string(path, String::new()).await.expect("open");
+            insert_file_from_string(path, String::new())
+                .await
+                .expect("open");
         }
     }
 
