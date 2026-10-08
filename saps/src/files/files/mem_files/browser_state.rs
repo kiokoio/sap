@@ -49,8 +49,6 @@ use crate::kernel::transaction::{
 };
 
 use crate::files::engines::async_io::indexed_db::IndexedDbIo;
-use crate::files::files::mem_files::constants::SAVE_THRESHOLD;
-use crate::files::files::mem_files::full_descriptors::tx_utils;
 use crate::files::files::mem_files::full_mem_file::{Async, MemFile};
 use crate::files::io::async_file::AsyncFileIo;
 use crate::files::paths::{FilePath, Path};
@@ -194,7 +192,9 @@ pub fn wipe_state() {
 /// Every operation is applied in place, without IO, while the buffer stays in the map (see the
 /// module docs). The transaction is then saved at most once, after the last operation, if the
 /// saving policy calls for it: a bulk edit (a run longer than one character) always does, and
-/// single character edits do once [`SAVE_THRESHOLD`] of them have built up since the last save.
+/// single character edits do once
+/// [`SAVE_THRESHOLD`](crate::files::files::mem_files::constants::SAVE_THRESHOLD) of them have
+/// built up since the last save.
 ///
 /// # Arguments
 /// - `path`: The file to apply the transaction to.
@@ -342,37 +342,37 @@ pub async fn flush_all() -> Result<(), FileError> {
 /// same position, so the replacement may be a different length from the run it replaces.
 ///
 /// # Returns
-/// Whether the transaction is due a save under the buffer's saving policy: `true` if any
-/// operation was a bulk edit, or if the single character edits since the last save have
-/// reached [`SAVE_THRESHOLD`].
+/// Whether any operation left the buffer due a save, under the saving policy the unsaved
+/// verbs on `MemFile` apply (see `full_descriptors/state.rs`).
 fn apply_transaction(file: &mut BrowserFile, transaction: &Transaction) -> Result<bool, FileError> {
-    let mut bulk_edit = false;
+    let mut save_due = false;
     for operation in transaction.operations() {
         match operation {
             Operation::Insert(InsertSlice { position, content }) => {
-                bulk_edit |= apply_insert(file, *position, content)?;
+                save_due |= apply_insert(file, *position, content)?;
             }
             Operation::Delete(DeleteSlice { position, length }) => {
-                bulk_edit |= apply_delete(file, *position, *length)?;
+                save_due |= apply_delete(file, *position, *length)?;
             }
             Operation::Swap(SwapSlice {
                 position,
                 length,
                 content,
             }) => {
-                bulk_edit |= apply_delete(file, *position, *length)?;
-                bulk_edit |= apply_insert(file, *position, content)?;
+                save_due |= apply_delete(file, *position, *length)?;
+                save_due |= apply_insert(file, *position, content)?;
             }
         }
     }
-    Ok(bulk_edit || file.ops_since_save >= SAVE_THRESHOLD)
+    Ok(save_due)
 }
 
-/// Inserts `content` at `position`. A single character is counted towards
-/// [`SAVE_THRESHOLD`]; a longer run is a bulk edit; an empty run is nothing to do.
+/// Inserts `content` at `position`, choosing the buffer path by run length: a single character
+/// takes the counted `insert_char` path, a longer run the bulk `insert_text` path, and an empty
+/// run is nothing to do.
 ///
 /// # Returns
-/// Whether the insert was a bulk edit, which is always due a save.
+/// Whether the buffer is now due a save.
 fn apply_insert(
     file: &mut BrowserFile,
     position: CursorIndex,
@@ -381,31 +381,17 @@ fn apply_insert(
     let mut characters = content.chars();
     match (characters.next(), characters.next()) {
         (None, _) => Ok(false),
-        (Some(character), None) => {
-            let contents = file.contents();
-            tx_utils::insert_char(
-                &contents,
-                &mut file.text,
-                &mut file.doc,
-                &position,
-                character,
-            )?;
-            file.ops_since_save += 1;
-            Ok(false)
-        }
-        (Some(_), Some(_)) => {
-            let contents = file.contents();
-            tx_utils::insert_text(&contents, &mut file.text, &mut file.doc, &position, content)?;
-            Ok(true)
-        }
+        (Some(character), None) => file.insert_char_unsaved(position, character),
+        (Some(_), Some(_)) => file.insert_text_unsaved(position, content),
     }
 }
 
-/// Deletes `length` characters from `position`. One character is counted towards
-/// [`SAVE_THRESHOLD`]; a longer run is a bulk edit; a zero length run is nothing to do.
+/// Deletes `length` characters from `position`, choosing the buffer path by run length: one
+/// character takes the counted `delete_char` path, a longer run the bulk `delete_range` path,
+/// and a zero length run is nothing to do.
 ///
 /// # Returns
-/// Whether the delete was a bulk edit, which is always due a save.
+/// Whether the buffer is now due a save.
 fn apply_delete(
     file: &mut BrowserFile,
     position: CursorIndex,
@@ -413,17 +399,8 @@ fn apply_delete(
 ) -> Result<bool, FileError> {
     match length {
         0 => Ok(false),
-        1 => {
-            let contents = file.contents();
-            tx_utils::delete_char(&contents, &mut file.text, &mut file.doc, &position)?;
-            file.ops_since_save += 1;
-            Ok(false)
-        }
-        _ => {
-            let contents = file.contents();
-            tx_utils::delete_range(&contents, &mut file.text, &mut file.doc, &position, length)?;
-            Ok(true)
-        }
+        1 => file.delete_char_unsaved(position),
+        _ => file.delete_range_unsaved(position, length),
     }
 }
 
@@ -438,6 +415,7 @@ mod tests {
     // compiler would see the same bytes.
 
     use super::*;
+    use crate::files::files::mem_files::constants::SAVE_THRESHOLD;
     use futures::join;
     use wasm_bindgen_test::*;
 

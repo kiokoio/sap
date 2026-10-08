@@ -1,16 +1,16 @@
 //! The async write path for the typestate `MemFile`.
 //!
 //! These are the editing methods for `MemFile<Async<..>>`: the awaited twin of
-//! [`tx_blocking`](super::tx_blocking). Each verb does the pure document work through the same
-//! shared [`tx_utils`] functions — the text manipulation is identical and colour-free — and
-//! differs only in the flush, which is the awaited [`AsyncFileIo::write_file`]. That is the
-//! whole reason the two write paths cannot be one method: the save is coloured, so everything
-//! that triggers it must be too. The batching policy is identical to the blocking path.
+//! [`tx_blocking`](super::tx_blocking). Each verb applies its edit through the same shared
+//! unsaved verbs in [`state`](super::state) — the edit and the saving policy are identical and
+//! colour-free — and differs only in the save, which is the awaited
+//! [`AsyncFileIo::write_file`]. That is the whole reason the two write paths cannot be one
+//! method: the save is coloured, so everything that triggers it must be too.
 //!
 //! ## Saving policy (unchanged from the server `MemFile`)
 //!
 //! - Single character edits (`insert_char`, `delete_char`) are counted and only flushed once
-//!   [`SAVE_THRESHOLD`] of them have accumulated since the last save.
+//!   `SAVE_THRESHOLD` of them have accumulated since the last save.
 //! - Bulk edits (`delete_range`, `insert_text`) flush immediately, because a single one can
 //!   change a lot of text at once.
 //! - `apply_update` (a remote edit off the relay) is not flushed here — and, since applying
@@ -18,7 +18,6 @@
 use crate::errors::file::FileError;
 use crate::kernel::transaction::CursorIndex;
 
-use crate::files::files::mem_files::constants::SAVE_THRESHOLD;
 use crate::files::files::mem_files::full_descriptors::tx_utils;
 use crate::files::files::mem_files::full_mem_file::{Async, MemFile};
 use crate::files::io::async_file::AsyncFileIo;
@@ -27,7 +26,7 @@ impl<'a, S: AsyncFileIo> MemFile<Async<'a, S>> {
     /// Inserts a single character at a cursor position. Per key stroke.
     ///
     /// The common typing path: applied to the buffer and only flushed once enough of these
-    /// have built up (see [`SAVE_THRESHOLD`]).
+    /// have built up (see `SAVE_THRESHOLD`).
     ///
     /// # Arguments
     /// - `position`: Where in the buffer to insert, as a line and column.
@@ -41,15 +40,16 @@ impl<'a, S: AsyncFileIo> MemFile<Async<'a, S>> {
         position: CursorIndex,
         character: char,
     ) -> Result<(), FileError> {
-        let contents = self.contents();
-        tx_utils::insert_char(&contents, &mut self.text, &mut self.doc, &position, character)?;
-        self.record_single_edit().await
+        if self.insert_char_unsaved(position, character)? {
+            self.save().await?;
+        }
+        Ok(())
     }
 
     /// Deletes the single character at a cursor position. Per key stroke.
     ///
     /// Like `insert_char` this is the common path and so is only flushed once
-    /// [`SAVE_THRESHOLD`] single character edits have built up. A position at or past the end
+    /// `SAVE_THRESHOLD` single character edits have built up. A position at or past the end
     /// of the buffer is a no-op rather than a panic.
     ///
     /// # Arguments
@@ -59,9 +59,10 @@ impl<'a, S: AsyncFileIo> MemFile<Async<'a, S>> {
     /// `Ok(())` once the character is removed, or a `FileError` if crossing the threshold
     /// triggered a save that the backend rejected.
     pub async fn delete_char(&mut self, position: CursorIndex) -> Result<(), FileError> {
-        let contents = self.contents();
-        tx_utils::delete_char(&contents, &mut self.text, &mut self.doc, &position)?;
-        self.record_single_edit().await
+        if self.delete_char_unsaved(position)? {
+            self.save().await?;
+        }
+        Ok(())
     }
 
     /// Deletes a run of characters starting at a cursor position.
@@ -83,15 +84,14 @@ impl<'a, S: AsyncFileIo> MemFile<Async<'a, S>> {
         position: CursorIndex,
         delta: usize,
     ) -> Result<(), FileError> {
-        let contents = self.contents();
-        tx_utils::delete_range(&contents, &mut self.text, &mut self.doc, &position, delta)?;
+        self.delete_range_unsaved(position, delta)?;
         self.save().await
     }
 
     /// Inserts a run of text at a cursor position.
     ///
     /// The batched / paste path. A single one of these can add a lot of text, so it is saved
-    /// straight away rather than counted towards [`SAVE_THRESHOLD`].
+    /// straight away rather than counted towards `SAVE_THRESHOLD`.
     ///
     /// # Arguments
     /// - `position`: Where to insert the text, as a line and column.
@@ -105,8 +105,7 @@ impl<'a, S: AsyncFileIo> MemFile<Async<'a, S>> {
         position: CursorIndex,
         data: &str,
     ) -> Result<(), FileError> {
-        let contents = self.contents();
-        tx_utils::insert_text(&contents, &mut self.text, &mut self.doc, &position, data)?;
+        self.insert_text_unsaved(position, data)?;
         self.save().await
     }
 
@@ -127,22 +126,6 @@ impl<'a, S: AsyncFileIo> MemFile<Async<'a, S>> {
     /// applied.
     pub fn apply_update(&mut self, update: &[u8]) -> Result<(), FileError> {
         tx_utils::apply_update(&mut self.doc, &self.path, update)
-    }
-
-    /// Counts a single character edit and saves once enough have built up.
-    ///
-    /// Shared by `insert_char` and `delete_char`; crosses the threshold every
-    /// [`SAVE_THRESHOLD`] calls, at which point the awaited save resets the counter.
-    ///
-    /// # Returns
-    /// `Ok(())` once counted (and flushed if the threshold was crossed), or a `FileError` if
-    /// that flush failed.
-    async fn record_single_edit(&mut self) -> Result<(), FileError> {
-        self.ops_since_save += 1;
-        if self.ops_since_save >= SAVE_THRESHOLD {
-            self.save().await?;
-        }
-        Ok(())
     }
 }
 
